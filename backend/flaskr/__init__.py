@@ -17,23 +17,19 @@ def create_app(test_config=None):
     setup_db(app)
 
     # Now, enable the CORS
-    CORS(app, resources={r"/api/*": {"origins": "*"}})
+    cors = CORS(app, resources={r"/*": {"origins": "*"}})
 
-    '''
-  @TODO: Use the after_request decorator to set Access-Control-Allow
-  '''
-
+    # CORS headers
     @app.after_request
     def after_request(response):
-        response.headers.add('Access-Control-Allow-Headers',
-                             'Content-Type, Authorization')
-        response.headers.add('Access-Control-Allow-Methods',
-                             'GET, POST, PATCH, DELETE, OPTIONS')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,true')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,POST,DELETE')
         return response
 
     @app.route('/categories')
     def categories():
         categories = Category.query.all()
+
         # create dict
         formatted_categories = {}
         for category in categories:
@@ -45,29 +41,47 @@ def create_app(test_config=None):
 
     def paginate_questions(request):
         page = request.args.get('page', 1, type=int)
-        start = QUESTIONS_PER_PAGE*(page - 1)
+        start = QUESTIONS_PER_PAGE * (page - 1)
         end = start + QUESTIONS_PER_PAGE
         questions = Question.query.all()
         return questions[start:end]
 
+
+
     def reformat_data(items):
-        formatted_items = [item.format() for item in items]
+        formatted_items = []
+        for item in items:
+            formatted_items.append(item.format())
+
         return formatted_items
+
+
 
     @app.route('/questions')
     def get_all_questions():
+        # get all questions as paginated
         all_questions = paginate_questions(request)
+
+        #if no questions available
         if len(all_questions) == 0:
             abort(404)
+
+        # reformat the questions to be suit for json
         formatted_questions = reformat_data(all_questions)
+
+        #get all categories from database
         all_categories = Category.query.all()
 
-        # create dict for all categories
-        formatted_categories = {}
-        for category in all_categories:
-            formatted_categories[category.id] = category.type
 
+        # reformat the categores
+        categories = {}
+        for category in all_categories:
+            categories[category.id] = category.type
+
+        #get the total number of questions
         total_num_questions = len(Question.query.all())
+
+        #get the categories for the quesions of this page
         current_categories = set()
         for question in formatted_questions:
             current_categories.add(question['category'])
@@ -77,8 +91,8 @@ def create_app(test_config=None):
         return jsonify({
             'success': True,
             'total_questions': total_num_questions,
-            'categories': formatted_categories,
-            'current_category': current_categories_list,
+            'categories': categories,
+            'categories this page': current_categories_list,
             'questions': formatted_questions,
 
         })
@@ -101,35 +115,43 @@ def create_app(test_config=None):
         try:
             body = request.get_json()
 
-            #get the search term from the body
-
+            #get all available parameters from the body
             searchTerm = body.get('searchTerm', None)
+            answer = body.get('answer')
+            question = body.get('question')
+            difficulty = body.get('difficulty')
+            category = body.get('category')
 
-            # if the key found
+            '''FOR SEARCHING SOME QUESTIONS'''
+
+            # if the operation is for search and the key found
             if searchTerm:
-                #get all questions for search term
+                # get all questions for search term
                 questions = Question.query.filter(Question.question.ilike('%' + searchTerm + '%')).all()
+
+                # reformat the questions
                 searched_questions = reformat_data(questions)
                 return jsonify({
                     'success': True,
                     'questions': searched_questions
                 })
 
+            '''FOR CREATING A NEW QUESTION'''
 
             # if some data doesn't exist return 400
-            if body.get('answer') is None or body.get('question') is None or \
-                    body.get('difficulty') is None or body.get('category') is None:
+            if answer is None or question is None or difficulty is None or category is None:
                 abort(400)
 
-            # Post a new question
+
             # if all data exist
             newQuestion = Question(
-                question = body.get('question'),
-                answer = body.get('answer'),
-                difficulty = int(body.get('difficulty')),
-                category = body.get('category')
+                question = Question,
+                answer = answer,
+                difficulty = difficulty,
+                category = category
             )
 
+            # insert to the database
             newQuestion.insert()
             return jsonify({
                 'success': True
@@ -141,14 +163,16 @@ def create_app(test_config=None):
     def category_questions(category_id):
 
         #get the requested category
-        category = Category.query.filter_by(id=category_id).one_or_none()
+        category = Category.query.get(category_id)
 
-        # return 404 if there is no category
+        # return 404 if there is no category with this ID
         if not category:
             abort(404)
 
         # Now get all questions by the category
-        questions = Question.query.filter_by(category=category_id)
+        questions = Question.query.order_by(Question.id).filter(Question.category == category_id ).all()
+
+        #reformat data
         formatted_questions = reformat_data(questions)
 
         return jsonify({
@@ -159,17 +183,21 @@ def create_app(test_config=None):
     @app.route('/quizzes', methods=['POST'])
     def get_quiz_question():
         body = request.get_json()
-        category = body.get('quiz_category', None)
 
+        # get the data from the body
+        category = body.get('quiz_category', None)
         previous_questions = body.get('previous_questions')
 
         all_categories = ['Science', 'Art', 'Geography', 'History', 'Entertainment', 'Sports']
 
+        # check if the selected category is in the list
         if category in all_categories:
-            selected_category = Category.query.filter_by( type=category ).one_or_none()
+            # get the category object
+            selected_category = Category.query.filter_by(type=category).one_or_none()
 
             if not selected_category:
                 abort(404)
+            # Now get all questions of this category
             questions = Question.query.filter_by(category=selected_category.id)
 
         else:
@@ -178,19 +206,25 @@ def create_app(test_config=None):
 
         # array to add all remaining questions;
         remaining_questions = []
+
         for question in questions:
             found = False
             for previous in previous_questions:
-                #if the current question is the previous questions
+                # if the current question is the previous questions
                 if previous == question.id:
                     found = True
                     break
             if not found:
+                #if the current question is in the previous question entered by the user then don't append it.
                 remaining_questions.append(question)
+
+        # get a random number from 0 to the number remaining questions
         random_num = random.randint(0, len(remaining_questions)-1)
 
+        new_question = remaining_questions[random_num].format()
+
         return jsonify({
-            'question': remaining_questions[random_num].format(),
+            'question': new_question,
             'success': True
         })
 
